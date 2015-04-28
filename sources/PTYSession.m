@@ -3420,8 +3420,7 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     return [_textview copySelectionAccordingToUserPreferences];
 }
 
-- (void)takeFocus
-{
+- (void)takeFocus {
     [[[[self tab] realParentWindow] window] makeFirstResponder:_textview];
 }
 
@@ -4033,7 +4032,8 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     DLog(@"PTYSession keyDown modflag=%d keystr=%@ unmodkeystr=%@ unicode=%d unmodunicode=%d", (int)modflag, keystr, unmodkeystr, (int)unicode, (int)unmodunicode);
     _lastInput = [NSDate timeIntervalSinceReferenceDate];
     [self resumeOutputIfNeeded];
-    if ([self textViewIsZoomedIn]) {
+    if ([self textViewIsZoomedIn] && unicode == 27) {
+        // Escape exits zoom (pops out one level, since you can zoom repeatedly)
         [[[self tab] realParentWindow] replaceSyntheticActiveSessionWithLiveSessionIfNeeded];
     } else if ([[[self tab] realParentWindow] inInstantReplay]) {
         DLog(@"PTYSession keyDown in IR");
@@ -5076,10 +5076,13 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
 }
 
 - (VT100GridAbsCoordRange)textViewRangeOfLastCommandOutput {
+    DLog(@"Fetching range of last command output...");
     if (![[CommandHistory sharedInstance] commandHistoryHasEverBeenUsed]) {
+        DLog(@"Command history has never been used.");
         [CommandHistory showInformationalMessage];
         return VT100GridAbsCoordRangeMake(-1, -1, -1, -1);
     } else {
+        DLog(@"Returning cached range.");
         return _screen.lastCommandOutputRange;
     }
 }
@@ -6088,6 +6091,13 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
 - (NSString *)commandInRange:(VT100GridCoordRange)range {
     if (range.start.x == -1) {
         return nil;
+    }
+    // If semantic history goes nuts and the end-of-command code isn't received (which seems to be a
+    // common problem, probably because of buggy old versions of SH scripts) , the command can grow
+    // without bound. We'll limit the length of a command to avoid performance problems.
+    const int kMaxLines = 50;
+    if (range.end.y - range.start.y > kMaxLines) {
+        range.end.y = range.start.y + kMaxLines;
     }
     iTermTextExtractor *extractor = [iTermTextExtractor textExtractorWithDataSource:_screen];
     NSString *command = [extractor contentInRange:VT100GridWindowedRangeMake(range, 0, 0)
