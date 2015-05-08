@@ -153,6 +153,10 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
 @end
 
 @implementation PTYSession {
+    // PTYTask has started a job, and a call to -taskWasDeregistered will be
+    // made when it dies. All access should be synchronized.
+    BOOL _registered;
+
     // name can be changed by the host.
     NSString *_name;
 
@@ -623,8 +627,11 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
                                inView:(SessionView *)sessionView
                                 inTab:(PTYTab *)theTab
                         forObjectType:(iTermObjectType)objectType {
+    DLog(@"Restoring session from arrangement");
     PTYSession* aSession = [[[PTYSession alloc] init] autorelease];
     aSession.view = sessionView;
+    [sessionView setSession:aSession];
+
     [[sessionView findViewController] setDelegate:aSession];
     Profile* theBookmark =
         [[ProfileModel sharedInstance] bookmarkWithGuid:[[arrangement objectForKey:SESSION_ARRANGEMENT_BOOKMARK]
@@ -665,6 +672,7 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     [aSession setTab:theTab];
     NSNumber *n = [arrangement objectForKey:SESSION_ARRANGEMENT_TMUX_PANE];
     if (!n) {
+        DLog(@"No tmux pane ID during session restoration");
         // |contents| will be non-nil when using system window restoration.
         NSDictionary *contents = arrangement[SESSION_ARRANGEMENT_CONTENTS];
 
@@ -680,8 +688,10 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
         // GUID will be set for new saved arrangements since late 2014.
         // Older versions won't be able to associate saved state with windows from a saved arrangement.
         if (arrangement[SESSION_ARRANGEMENT_GUID]) {
+            DLog(@"The session arrangement has a GUID");
             NSString *guid = arrangement[SESSION_ARRANGEMENT_GUID];
             if (guid && gRegisteredSessionContents[guid]) {
+                DLog(@"The GUID is registered");
                 // There was a registered session with this guid. This session was created by
                 // restoring a saved arrangement and there is saved content registered.
                 contents = gRegisteredSessionContents[guid];
@@ -692,10 +702,13 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
                 // Use the arrangement's guid during startup because we assume the session is being
                 // restored from a saved arrangement.
                 aSession.guid = guid;
-                DLog(@"Assign guid %@ to session %@ (session is loaded from saved arrangement. No content registered.)", guid, aSession);
+                DLog(@"iTerm2 is starting up. Assign guid %@ to session %@ (session is loaded from saved arrangement. No content registered.)", guid, aSession);
             }
         }
+        DLog(@"Have contents=%@", @(contents != nil));
+        DLog(@"Restore window contents=%@", @([iTermAdvancedSettingsModel restoreWindowContents]));
         if (contents && [iTermAdvancedSettingsModel restoreWindowContents]) {
+            DLog(@"Loading content from line buffer dictionary");
             [aSession setContentsFromLineBufferDictionary:contents];
         }
     } else {
@@ -754,8 +767,10 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     }
     NSDictionary *liveArrangement = arrangement[SESSION_ARRANGEMENT_LIVE_SESSION];
     if (liveArrangement) {
+        SessionView *liveView = [[[SessionView alloc] initWithFrame:sessionView.frame] autorelease];
+        [theTab addHiddenLiveView:liveView];
         aSession.liveSession = [self sessionFromArrangement:liveArrangement
-                                                     inView:[[SessionView alloc] initWithFrame:sessionView.frame]
+                                                     inView:liveView
                                                       inTab:theTab
                                               forObjectType:objectType];
     }
@@ -1080,6 +1095,9 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     if ([_profile[KEY_AUTOLOG] boolValue]) {
         [_shell loggingStartWithPath:[self _autoLogFilenameForTermId:itermId]];
     }
+    @synchronized(self) {
+      _registered = YES;
+    }
     [_shell launchWithPath:program
                  arguments:arguments
                environment:env
@@ -1203,14 +1221,6 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
             // changed size
             [_tmuxController fitLayoutToWindows];
         }
-
-        // PTYTask will never call taskWasDeregistered since tmux clients are never registered in
-        // the first place. There can be calls queued in this queue from previous tmuxReadTask:
-        // calls, so queue up a fake call to taskWasDeregistered that will run after all of them,
-        // serving the same purpose.
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            [self taskWasDeregistered];
-        });
     } else if (self.tmuxMode == TMUX_GATEWAY) {
         [_tmuxController detach];
         [_tmuxGateway release];
@@ -1275,15 +1285,23 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
                withObject:nil
                afterDelay:[iTermProfilePreferences intForKey:KEY_UNDO_TIMEOUT
                                                    inProfile:_profile]];
+    // The analyzer complains that _view is leaked here, but the delayed perform to -hardStop above
+    // releases it. If it is canceled by -revive, then -revive autoreleases the view.
     [[iTermController sharedInstance] addRestorableSession:[self restorableSession]];
 }
 
 - (void)hardStop {
     [[iTermController sharedInstance] removeSessionFromRestorableSessions:self];
-    [_view release];
-    // -taskWasDeregistered will perform the corresponding release.
+    [_view release];  // This balances a retain in -terminate.
+    // -taskWasDeregistered or the autorelease below will balance this retain.
     [self retain];
-    // -stop will cause -taskWasDeregistered to be called on a background thread.
+    // If _registered, -stop will cause -taskWasDeregistered to be called on a background thread,
+    // which will release this object. Otherwise we autorelease now.
+    @synchronized(self) {
+      if (!_registered) {
+          [self autorelease];
+      }
+    }
     [_shell stop];
     [_textview setDataSource:nil];
     [_textview setDelegate:nil];
@@ -1306,7 +1324,7 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
         _screen.terminal = _terminal;
         _terminal.delegate = _screen;
         _shell.paused = NO;
-        [_view autorelease];
+        [_view autorelease];  // This balances a retain in -terminate prior to calling -makeTerminationUndoable
         return YES;
     } else {
         return NO;
@@ -1409,6 +1427,9 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
 
 - (void)taskWasDeregistered {
     DLog(@"taskWasDeregistered");
+    @synchronized(self) {
+      _registered = NO;
+    }
     // This is called on the background thread. After this is called, we won't get any more calls
     // on the background thread and it is safe for us to be dealloc'ed. This pairs with the retain
     // in -hardStop. For sanity's sake, ensure dealloc gets called on the main thread.
@@ -4040,6 +4061,8 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     [self resumeOutputIfNeeded];
     if ([self textViewIsZoomedIn] && unicode == 27) {
         // Escape exits zoom (pops out one level, since you can zoom repeatedly)
+        // The zoomOut: IBAction doesn't get performed by shortcut, I guess because Esc is not a
+        // valid shortcut. So we do it here.
         [[[self tab] realParentWindow] replaceSyntheticActiveSessionWithLiveSessionIfNeeded];
     } else if ([[[self tab] realParentWindow] inInstantReplay]) {
         DLog(@"PTYSession keyDown in IR");

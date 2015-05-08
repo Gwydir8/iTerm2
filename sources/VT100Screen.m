@@ -4117,6 +4117,7 @@ static void SwapInt(int *a, int *b) {
     linebuffer_ = lineBuffer;
     int linesRestored = MIN(MAX(0, currentGrid_.size.height - 1),
                             [lineBuffer numLinesWithWidth:self.width]);
+    DLog(@"Restored %d wrapped lines from dictionary", linesRestored);
     [currentGrid_ restoreScreenFromLineBuffer:linebuffer_
                               withDefaultChar:[currentGrid_ defaultChar]
                             maxLinesToRestore:linesRestored];
@@ -4127,7 +4128,7 @@ static void SwapInt(int *a, int *b) {
 #pragma mark - iTermFullScreenUpdateDetectorDelegate
 
 - (VT100Grid *)temporaryDoubleBufferedGridCopy {
-    VT100Grid *copy = [currentGrid_ copy];
+    VT100Grid *copy = [[currentGrid_ copy] autorelease];
     copy.delegate = nil;
     return copy;
 }
