@@ -124,7 +124,18 @@
                stringByReplacingOccurrencesOfString:@"\n" withString:@"\r"];
 }
 
+- (NSArray *)componentsBySplittingProfileListQuery {
+    return [self componentsBySplittingStringWithQuotesAndBackslashEscaping:@{}];
+}
+
 - (NSArray *)componentsInShellCommand {
+    return [self componentsBySplittingStringWithQuotesAndBackslashEscaping:@{ @'n': @"\n",
+                                                                              @'a': @"\x07",
+                                                                              @'t': @"\t",
+                                                                              @'r': @"\r" } ];
+}
+
+- (NSArray *)componentsBySplittingStringWithQuotesAndBackslashEscaping:(NSDictionary *)escapes {
     NSMutableArray *result = [NSMutableArray array];
 
     int inQuotes = 0; // Are we inside double quotes?
@@ -154,14 +165,8 @@
         if (escape) {
             valueStarted = YES;
             escape = NO;
-            if (c == 'n') {
-                [currentValue appendString:@"\n"];
-            } else if (c == 'a') {
-                [currentValue appendFormat:@"%c", 7];
-            } else if (c == 't') {
-                [currentValue appendString:@"\t"];
-            } else if (c == 'r') {
-                [currentValue appendString:@"\r"];
+            if (escapes[@(c)]) {
+                [currentValue appendString:escapes[@(c)]];
             } else {
                 [currentValue appendFormat:@"%C", c];
             }
@@ -574,7 +579,7 @@ int decode_utf8_char(const unsigned char *datap,
     int start = 0;
     int end = [self length];
     if (firstBadCharRange.location != NSNotFound) {
-        start = firstBadCharRange.location + 1;
+        start = NSMaxRange(firstBadCharRange);
         if (charsTakenFromPrefixPtr) {
             *charsTakenFromPrefixPtr = offset - start;
         }
@@ -1242,9 +1247,9 @@ static TECObjectRef CreateTECConverterForUTF8Variants(TextEncodingVariant varian
                                                                options:NSBackwardsSearch];
     if (rangeOfLastWantedCharacter.location == NSNotFound) {
         [self deleteCharactersInRange:NSMakeRange(0, self.length)];
-    } else if (rangeOfLastWantedCharacter.location < self.length - 1) {
-        NSUInteger i = rangeOfLastWantedCharacter.location + 1;
-        [self deleteCharactersInRange:NSMakeRange(i, self.length - i)];
+    } else if (NSMaxRange(rangeOfLastWantedCharacter) < self.length) {
+        [self deleteCharactersInRange:NSMakeRange(NSMaxRange(rangeOfLastWantedCharacter),
+                                                  self.length - NSMaxRange(rangeOfLastWantedCharacter))];
     }
 }
 

@@ -1084,10 +1084,10 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     }
 
     NSWindowController<iTermWindowController> *pty = [_tab realParentWindow];
-    NSString *itermId = [NSString stringWithFormat:@"w%dt%dp%d",
+    NSString *itermId = [NSString stringWithFormat:@"w%dt%dp%lu",
                          [pty number],
-                         [_tab realObjectCount] - 1,
-                         [_tab indexOfSessionView:[self view]]];
+                         _tab.tabNumberForItermSessionId,
+                         (unsigned long)_tab.sessions.count];
     env[@"ITERM_SESSION_ID"] = itermId;
     if (_profile[KEY_NAME]) {
         env[@"ITERM_PROFILE"] = [_profile[KEY_NAME] stringByPerformingSubstitutions:substitutions];
@@ -1120,7 +1120,8 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
                                              withURL:url
                                             isHotkey:NO
                                              makeKey:NO
-                                             command:nil];
+                                             command:nil
+                                               block:nil];
 }
 
 - (void)selectPaneLeftInCurrentTerminal
@@ -1559,10 +1560,13 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
 - (void)checkTriggers
 {
     for (Trigger *trigger in _triggers) {
-        [trigger tryString:_triggerLine
-                 inSession:self
-               partialLine:NO
-                lineNumber:[_screen absoluteLineNumberOfCursor]];
+        BOOL stop = [trigger tryString:_triggerLine
+                             inSession:self
+                           partialLine:NO
+                            lineNumber:[_screen absoluteLineNumberOfCursor]];
+        if (stop) {
+            break;
+        }
     }
 }
 
@@ -1573,10 +1577,13 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     }
     _lastPartialLineTriggerCheck = now;
     for (Trigger *trigger in _triggers) {
-        [trigger tryString:_triggerLine
-                 inSession:self
-               partialLine:YES
-                lineNumber:[_screen absoluteLineNumberOfCursor]];
+        BOOL stop = [trigger tryString:_triggerLine
+                             inSession:self
+                           partialLine:YES
+                            lineNumber:[_screen absoluteLineNumberOfCursor]];
+        if (stop) {
+            break;
+        }
     }
 }
 
@@ -1617,7 +1624,8 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
                                       height:1
                                        units:kVT100TerminalUnitsCells
                          preserveAspectRatio:NO
-                                       image:[NSImage imageNamed:@"BrokenPipeDivider"]];
+                                       image:[NSImage imageNamed:@"BrokenPipeDivider"]
+                                        data:nil];
     }
     [_screen appendStringAtCursor:message];
     [_screen appendStringAtCursor:@" "];
@@ -1628,7 +1636,8 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
                                       height:1
                                        units:kVT100TerminalUnitsCells
                          preserveAspectRatio:NO
-                                       image:[NSImage imageNamed:@"BrokenPipeDivider"]];
+                                       image:[NSImage imageNamed:@"BrokenPipeDivider"]
+                                        data:nil];
     }
     [_screen crlf];
     [_terminal setForegroundColor:savedFgColor.foregroundColor
@@ -3017,9 +3026,14 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
 
     anotherUpdateNeeded |= [_textview refresh];
     anotherUpdateNeeded |= [[[self tab] parentWindow] tempTitle];
+    BOOL animating = _textview.getAndResetDrawingAnimatedImageFlag;
+    anotherUpdateNeeded |= animating;
 
     if (anotherUpdateNeeded) {
-        if ([[[self tab] parentWindow] currentTab] == [self tab]) {
+        if (animating) {
+            // A cell of animated GIF has been drawn since the last call to updateDisplay.
+            [self scheduleUpdateIn:kFastTimerIntervalSec];
+        } else if ([[[self tab] parentWindow] currentTab] == [self tab]) {
             [self scheduleUpdateIn:[iTermAdvancedSettingsModel timeBetweenBlinks]];
         } else {
             [self scheduleUpdateIn:kBackgroundSessionIntervalSec];
@@ -6492,24 +6506,41 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     [self insertText:string];
 }
 
-- (BOOL)popupKeyDown:(NSEvent *)event currentValue:(NSString *)value {
-    if ([[[self tab] realParentWindow] autoCommandHistoryIsOpenForSession:self]) {
-        unichar c = [[event characters] characterAtIndex:0];
-        if (c == 27) {
-            [[[self tab] realParentWindow] hideAutoCommandHistoryForSession:self];
+- (BOOL)popupHandleSelector:(SEL)selector
+                     string:(NSString *)string
+               currentValue:(NSString *)currentValue {
+    if (![[[self tab] realParentWindow] autoCommandHistoryIsOpenForSession:self]) {
+        return NO;
+    }
+    if (selector == @selector(cancel:)) {
+        [[[self tab] realParentWindow] hideAutoCommandHistoryForSession:self];
+        return YES;
+    }
+    if (selector == @selector(insertNewline:)) {
+        if ([currentValue isEqualToString:[self currentCommand]]) {
+            // Send the enter key on.
+            [self insertText:@"\n"];
             return YES;
-        } else if (c == '\r' && value) {
-            if ([value isEqualToString:[self currentCommand]]) {
-                // Send the enter key on.
-                [_textview keyDown:event];
-                return YES;
-            } else {
-                return NO;  // select the row
-            }
-        } else if (value) {
-            [_textview keyDown:event];
-            return YES;
+        } else {
+            return NO;  // select the row
         }
+    }
+    if (selector == @selector(deleteBackward:)) {
+        [_textview keyDown:[NSEvent keyEventWithType:NSKeyDown
+                                            location:NSZeroPoint
+                                       modifierFlags:[NSEvent modifierFlags]
+                                           timestamp:0
+                                        windowNumber:_textview.window.windowNumber
+                                             context:nil
+                                          characters:@"\x7f"
+                         charactersIgnoringModifiers:@"\x7f"
+                                           isARepeat:NO
+                                             keyCode:51]];  // 51 is the keycode for delete; not in any header file :(
+        return YES;
+    }
+    if (selector == @selector(insertText:)) {
+        [self insertText:string];
+        return YES;
     }
     return NO;
 }

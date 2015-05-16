@@ -24,6 +24,7 @@
 #import "iTermGrowlDelegate.h"
 #import "iTermInstantReplayWindowController.h"
 #import "iTermOpenQuicklyWindow.h"
+#import "iTermPasswordManagerWindowController.h"
 #import "iTermPreferences.h"
 #import "iTermProfilePreferences.h"
 #import "iTermSelection.h"
@@ -110,7 +111,7 @@ static const CGFloat kHorizontalTabBarHeight = 22;
 - (void)setBottomCornerRounded:(BOOL)rounded;
 @end
 
-@interface PseudoTerminal () <iTermTabBarControlViewDelegate>
+@interface PseudoTerminal () <iTermTabBarControlViewDelegate, iTermPasswordManagerDelegate>
 @property(nonatomic, assign) BOOL windowInitialized;
 @end
 
@@ -548,7 +549,7 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     myWindow = [[PTYWindow alloc] initWithContentRect:initialFrame
                                             styleMask:styleMask
                                               backing:NSBackingStoreBuffered
-                                                defer:NO];
+                                                defer:isHotkey];
     if (windowType != WINDOW_TYPE_LION_FULL_SCREEN) {
         // For some reason, you don't always get the frame you requested. I saw
         // this on OS 10.10 when creating normal windows on a 2-screen display. The
@@ -569,7 +570,11 @@ static const CGFloat kHorizontalTabBarHeight = 22;
 
     _fullScreen = (windowType == WINDOW_TYPE_TRADITIONAL_FULL_SCREEN);
     background_ = [[SolidColorView alloc] initWithFrame:[[[self window] contentView] frame] color:[NSColor windowBackgroundColor]];
-    [[self window] setAlphaValue:1];
+    if (!isHotkey) {
+        [[self window] setAlphaValue:1];
+    } else {
+        [[self window] setAlphaValue:0];
+    }
     [[self window] setOpaque:NO];
 
     normalBackgroundColor = [background_ color];
@@ -792,7 +797,7 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     // are cases in fullscreen (e.g., when entering Lion fullscreen) when the
     // window doesn't have a title bar but also isn't borderless we also check
     // if we're in fullscreen.
-    if (self.window.styleMask != NSBorderlessWindowMask &&
+    if ((self.window.styleMask & NSTitledWindowMask) &&
         ![self anyFullScreen] &&
         ![self tabBarShouldBeVisible]) {
         // A division is needed, but there might already be one.
@@ -2779,6 +2784,12 @@ static const CGFloat kHorizontalTabBarHeight = 22;
             [iTermPreferences boolForKey:kPreferenceKeyHotkeyAutoHides] &&
             ![[HotkeyWindowController sharedInstance] rollingInHotkeyTerm]) {
             DLog(@"windowDidResignKey: is hotkey and hotkey window auto-hides");
+
+            // The hotkey window can co-exist with these apps.
+            static NSString *kAlfredBundleId = @"com.runningwithcrayons.Alfred-2";
+            static NSString *kApptivateBundleId = @"se.cocoabeans.apptivate";
+            NSArray *bundleIdsToNotDismissFor = @[ kAlfredBundleId, kApptivateBundleId ];
+
             // We want to dismiss the hotkey window when some other window
             // becomes key. Note that if a popup closes this function shouldn't
             // be called at all because it makes us key before closing itself.
@@ -2787,7 +2798,9 @@ static const CGFloat kHorizontalTabBarHeight = 22;
                 ![[NSApp keyWindow] isKindOfClass:[iTermOpenQuicklyWindow class]] &&
                 ![[[NSApp keyWindow] windowController] isKindOfClass:[ProfilesWindow class]] &&
                 ![iTermWarning showingWarning] &&
-                ![[[NSApp keyWindow] windowController] isKindOfClass:[PreferencePanel class]]) {
+                ![[[NSApp keyWindow] windowController] isKindOfClass:[PreferencePanel class]] &&
+                ![self.window.sheets containsObject:[NSApp keyWindow]] &&
+                ![bundleIdsToNotDismissFor containsObject:[[[NSWorkspace sharedWorkspace] frontmostApplication] bundleIdentifier]]) {
                 PtyLog(@"windowDidResignKey: new key window isn't popup so hide myself");
                 if ([[[NSApp keyWindow] windowController] isKindOfClass:[PseudoTerminal class]]) {
                     [[HotkeyWindowController sharedInstance] doNotOrderOutWhenHidingHotkeyWindow];
@@ -3893,8 +3906,8 @@ static const CGFloat kHorizontalTabBarHeight = 22;
       [[theTab tmuxController] setClientSize:[theTab tmuxSize]];
     }
     [self saveAffinitiesLater:[tabViewItem identifier]];
-        iTermApplicationDelegate *itad = (iTermApplicationDelegate *)[[iTermApplication sharedApplication] delegate];
-        [itad updateBroadcastMenuState];
+    iTermApplicationDelegate *itad = (iTermApplicationDelegate *)[[iTermApplication sharedApplication] delegate];
+    [itad updateBroadcastMenuState];
 }
 
 - (BOOL)tabView:(NSTabView*)tabView shouldCloseTabViewItem:(NSTabViewItem *)tabViewItem
@@ -3967,6 +3980,7 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     for (PTYSession* aSession in [aTab sessions]) {
         [aSession setIgnoreResizeNotifications:NO];
     }
+    [self tabsDidReorder];
 }
 
 - (void)tabView:(NSTabView *)aTabView closeWindowForLastTabViewItem:(NSTabViewItem *)tabViewItem
@@ -4316,6 +4330,20 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     }
 }
 
+- (void)tabsDidReorder {
+    TmuxController *controller = nil;
+    NSMutableArray *windowIds = [NSMutableArray array];
+
+    for (PTYTab *tab in [self tabs]) {
+        TmuxController *tmuxController = tab.tmuxController;
+        if (tmuxController) {
+            controller = tmuxController;
+            [windowIds addObject:@(tab.tmuxWindow)];
+        }
+    }
+    [controller setPartialWindowIdOrder:windowIds];
+}
+
 - (PTYTabView *)tabView
 {
     return TABVIEW;
@@ -4343,6 +4371,27 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     } else {
         return [tabBarControl accessoryTextColor];
     }
+}
+
+- (void)openPasswordManager {
+    if (self.window.sheets.count > 0) {
+        return;
+    }
+    iTermPasswordManagerWindowController *passwordManagerWindowController =
+        [[iTermPasswordManagerWindowController alloc] init];
+    passwordManagerWindowController.delegate = self;
+    [[NSApplication sharedApplication] beginSheet:[passwordManagerWindowController window]
+                                   modalForWindow:self.window
+                                    modalDelegate:self
+                                   didEndSelector:@selector(genericCloseSheet:returnCode:contextInfo:)
+                                      contextInfo:passwordManagerWindowController];
+}
+
+- (void)genericCloseSheet:(NSWindow *)sheet
+               returnCode:(int)returnCode
+              contextInfo:(id)contextInfo {
+    [sheet close];
+    [sheet release];
 }
 
 #pragma mark - iTermInstantReplayDelegate
@@ -5575,6 +5624,7 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     }
     [tabBarControl moveTabAtIndex:selectedIndex toIndex:destinationIndex];
     [self _updateTabObjectCounts];
+    [self tabsDidReorder];
 }
 
 - (IBAction)moveTabRight:(id)sender
@@ -5586,6 +5636,7 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     }
     [tabBarControl moveTabAtIndex:selectedIndex toIndex:destinationIndex];
     [self _updateTabObjectCounts];
+    [self tabsDidReorder];
 }
 
 - (void)refreshTmuxLayoutsAndWindow
@@ -6064,7 +6115,12 @@ static const CGFloat kHorizontalTabBarHeight = 22;
                 if ([self _haveRightBorder]) {
                     widthAdjustment += 1;
                 }
-                NSRect tabViewFrame = NSMakeRect(NSMaxX(tabBarFrame),
+                CGFloat xOffset = 0;
+                if (tabBarControl.flashing) {
+                    xOffset = -NSMaxX(tabBarFrame);
+                    widthAdjustment -= NSWidth(tabBarFrame);
+                }
+                NSRect tabViewFrame = NSMakeRect(NSMaxX(tabBarFrame) + xOffset,
                                                  NSMinY(tabBarFrame),
                                                  [thisWindow.contentView frame].size.width - NSWidth(tabBarFrame) - widthAdjustment,
                                                  NSHeight(tabBarFrame));
@@ -6729,13 +6785,44 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     }
 }
 
-- (IBAction)duplicateTab:(id)sender
-{
+- (IBAction)duplicateTab:(id)sender {
     PTYTab *theTab = (PTYTab *)[[sender representedObject] identifier];
     if (!theTab) {
         theTab = [self currentTab];
     }
-    [self appendTab:[[theTab copy] autorelease]];
+    PTYTab *copyOfTab = [[theTab copy] autorelease];
+    if ([iTermProfilePreferences boolForKey:KEY_PREVENT_TAB inProfile:self.currentSession.profile]) {
+        [[iTermController sharedInstance] launchBookmark:self.currentSession.profile
+                                              inTerminal:nil
+                                                 withURL:nil
+                                                isHotkey:NO
+                                                 makeKey:YES
+                                                 command:nil
+                                                   block:^PTYSession *(PseudoTerminal *term) {
+                                                       // Keep session size stable.
+                                                       for (PTYSession* aSession in [copyOfTab sessions]) {
+                                                           [aSession setIgnoreResizeNotifications:YES];
+                                                       }
+
+                                                       // This prevents the tab from getting resized to fit the window.
+                                                       [copyOfTab setReportIdealSizeAsCurrent:YES];
+
+                                                       // Add the tab to the empty window and resize the window.
+                                                       [term appendTab:copyOfTab];
+                                                       [term fitWindowToTabs];
+
+                                                       // Undo the prep work we've done.
+                                                       [copyOfTab setReportIdealSizeAsCurrent:NO];
+
+                                                       for (PTYSession* aSession in [copyOfTab sessions]) {
+                                                           [aSession setIgnoreResizeNotifications:NO];
+                                                       }
+
+                                                       return copyOfTab.activeSession;
+                                                   }];
+    } else {
+        [self appendTab:copyOfTab];
+    }
 }
 
 // These two methods are delecate because -closeTab: won't remove the tab from
@@ -7272,6 +7359,17 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     } else {
         NSBeep();
     }
+}
+
+#pragma mark - iTermPasswordManagerDelegate
+
+- (BOOL)iTermPasswordManagerCanEnterPassword {
+    PTYSession *session = [self currentSession];
+    return session && ![session exited];
+}
+
+- (void)iTermPasswordManagerEnterPassword:(NSString *)password {
+    [[self currentSession] enterPassword:password];
 }
 
 @end

@@ -672,11 +672,25 @@ static BOOL hasBecomeActive = NO;
 }
 
 - (IBAction)openPasswordManager:(id)sender {
-    if (!_passwordManagerWindowController) {
-        _passwordManagerWindowController = [[iTermPasswordManagerWindowController alloc] init];
-        _passwordManagerWindowController.delegate = self;
+    PseudoTerminal *term = [[iTermController sharedInstance] currentTerminal];
+
+    if (term) {
+        [term openPasswordManager];
+    } else {
+        if (!_passwordManagerWindowController) {
+            _passwordManagerWindowController = [[iTermPasswordManagerWindowController alloc] init];
+            _passwordManagerWindowController.delegate = self;
+        }
+        [[_passwordManagerWindowController window] makeKeyAndOrderFront:nil];
     }
-    [[_passwordManagerWindowController window] makeKeyAndOrderFront:nil];
+}
+
+- (void)genericCloseSheet:(NSWindow *)sheet
+               returnCode:(int)returnCode
+              contextInfo:(id)contextInfo {
+    [sheet close];
+    [_passwordManagerWindowController release];
+    _passwordManagerWindowController = nil;
 }
 
 - (void)openPasswordManagerToAccountName:(NSString *)name {
@@ -736,7 +750,8 @@ static BOOL hasBecomeActive = NO;
                                                  withURL:urlStr
                                                 isHotkey:NO
                                                  makeKey:NO
-                                                 command:nil];
+                                                 command:nil
+                                                   block:nil];
     }
 }
 
@@ -752,9 +767,32 @@ static BOOL hasBecomeActive = NO;
     [[[iTermController sharedInstance] currentTerminal] toggleFullScreenTabBar];
 }
 
+- (BOOL)possiblyTmuxValueForWindow:(BOOL)isWindow {
+    static NSString *const kPossiblyTmuxIdentifier = @"NoSyncNewWindowOrTabFromTmuxOpensTmux";
+    if ([[[[iTermController sharedInstance] currentTerminal] currentSession] isTmuxClient]) {
+        NSString *heading =
+            [NSString stringWithFormat:@"What kind of %@ do you want to open?",
+                isWindow ? @"window" : @"tab"];
+        NSString *title =
+            [NSString stringWithFormat:@"The current session is a tmux session. "
+                                       @"Would you like to create a new tmux %@ or use the default profile?",
+                                       isWindow ? @"window" : @"tab"];
+        NSString *tmuxAction = isWindow ? @"New tmux Window" : @"New tmux Tab";
+        iTermWarningSelection selection = [iTermWarning showWarningWithTitle:title
+                                                                     actions:@[ tmuxAction, @"Use Default Profile" ]
+                                                                   accessory:nil
+                                                                  identifier:kPossiblyTmuxIdentifier
+                                                                 silenceable:kiTermWarningTypePermanentlySilenceable
+                                                                     heading:heading];
+        return (selection == kiTermWarningSelection0);
+    } else {
+        return NO;
+    }
+}
+
 - (IBAction)newWindow:(id)sender
 {
-    [[iTermController sharedInstance] newWindow:sender possiblyTmux:YES];
+    [[iTermController sharedInstance] newWindow:sender possiblyTmux:[self possiblyTmuxValueForWindow:YES]];
 }
 
 - (IBAction)newSessionWithSameProfile:(id)sender
@@ -765,7 +803,7 @@ static BOOL hasBecomeActive = NO;
 - (IBAction)newSession:(id)sender
 {
     DLog(@"iTermApplicationDelegate newSession:");
-    [[iTermController sharedInstance] newSession:sender possiblyTmux:YES];
+    [[iTermController sharedInstance] newSession:sender possiblyTmux:[self possiblyTmuxValueForWindow:NO]];
 }
 
 // navigation

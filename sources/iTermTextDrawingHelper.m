@@ -17,6 +17,7 @@
 #import "iTermColorMap.h"
 #import "iTermController.h"
 #import "iTermFindCursorView.h"
+#import "iTermImageInfo.h"
 #import "iTermIndicatorsHelper.h"
 #import "iTermSelection.h"
 #import "iTermTextExtractor.h"
@@ -690,9 +691,9 @@ static const int kBadgeRightMargin = 8;
     if (currentRun->attrs.underline) {
         [currentRun->attrs.color set];
         NSRectFill(NSMakeRect(startPoint.x,
-                              startPoint.y + _cellSize.height - 2,
+                              startPoint.y + _cellSize.height + ceil(currentRun->attrs.fontInfo.font.underlinePosition),
                               runWidth,
-                              1));
+                              0.5));
     }
 }
 
@@ -747,7 +748,7 @@ static const int kBadgeRightMargin = 8;
 }
 
 - (void)drawImageCellInRun:(CRun *)run atPoint:(NSPoint)point {
-    ImageInfo *imageInfo = GetImageInfo(run->attrs.imageCode);
+    iTermImageInfo *imageInfo = GetImageInfo(run->attrs.imageCode);
     NSImage *image =
         [imageInfo imageEmbeddedInRegionOfSize:NSMakeSize(_cellSize.width * imageInfo.size.width,
                                                           _cellSize.height * imageInfo.size.height)];
@@ -763,7 +764,10 @@ static const int kBadgeRightMargin = 8;
     NSColor *backgroundColor = [self defaultBackgroundColor];
     [backgroundColor set];
     NSRectFill(NSMakeRect(0, 0, _cellSize.width * run->numImageCells, _cellSize.height));
-    
+    if (imageInfo.animated) {
+        [_delegate drawingHelperDidFindRunOfAnimatedCellsStartingAt:run->coord ofLength:run->numImageCells];
+        _animated = YES;
+    }
     [image drawInRect:NSMakeRect(0, 0, _cellSize.width * run->numImageCells, _cellSize.height)
              fromRect:NSMakeRect(chunkSize.width * run->attrs.imageColumn,
                                  image.size.height - _cellSize.height - chunkSize.height * run->attrs.imageLine,
@@ -1349,7 +1353,7 @@ static const int kBadgeRightMargin = 8;
             }
             if (!currentRun) {
                 firstRun = currentRun = malloc(sizeof(CRun));
-                CRunInitialize(currentRun, &attrs, storage, curX);
+                CRunInitialize(currentRun, &attrs, storage, VT100GridCoordMake(i, row), curX);
             }
             if (thisCharString) {
                 currentRun = CRunAppendString(currentRun,

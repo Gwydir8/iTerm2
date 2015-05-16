@@ -118,7 +118,6 @@ const CGFloat kDefaultTagsWidth = 80;
         [tableView_ setAllowsTypeSelect:NO];
         [tableView_ setBackgroundColor:[NSColor whiteColor]];
 
-
         tableColumn_ =
             [[NSTableColumn alloc] initWithIdentifier:@"name"];
         [tableColumn_ setEditable:NO];
@@ -176,7 +175,8 @@ const CGFloat kDefaultTagsWidth = 80;
     return [[searchField_ stringValue] length] > 0;
 }
 
-// Drag drop -------------------------------
+#pragma mark -  Drag drop
+
 - (BOOL)tableView:(NSTableView *)tv writeRowsWithIndexes:(NSIndexSet *)rowIndexes toPasteboard:(NSPasteboard*)pboard
 {
     // Copy guid to pboard
@@ -195,8 +195,10 @@ const CGFloat kDefaultTagsWidth = 80;
     return YES;
 }
 
-- (NSDragOperation)tableView:(NSTableView *)aTableView validateDrop:(id < NSDraggingInfo >)info proposedRow:(NSInteger)row proposedDropOperation:(NSTableViewDropOperation)operation
-{
+- (NSDragOperation)tableView:(NSTableView *)aTableView
+                validateDrop:(id<NSDraggingInfo>)info
+                 proposedRow:(NSInteger)row
+       proposedDropOperation:(NSTableViewDropOperation)operation {
     if ([info draggingSource] != aTableView) {
         return NSDragOperationNone;
     }
@@ -217,8 +219,7 @@ const CGFloat kDefaultTagsWidth = 80;
 - (BOOL)tableView:(NSTableView *)aTableView
        acceptDrop:(id <NSDraggingInfo>)info
               row:(NSInteger)row
-    dropOperation:(NSTableViewDropOperation)operation
-{
+    dropOperation:(NSTableViewDropOperation)operation {
     [[self undoManager] registerUndoWithTarget:self
                                       selector:@selector(setRowOrder:)
                                         object:[self rowOrder]];
@@ -275,15 +276,14 @@ const CGFloat kDefaultTagsWidth = 80;
 
 // End Drag drop -------------------------------
 
-- (void)_addTag:(id)sender
-{
+- (void)_addTag:(id)sender {
     int itemTag = [sender tag];
     NSArray* allTags = [[[dataSource_ underlyingModel] allTags] sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
     NSString* tag = [allTags objectAtIndex:itemTag];
 
-    [searchField_ setStringValue:[[NSString stringWithFormat:@"%@ %@",
-                                   [[searchField_ stringValue] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]],
-                                   tag] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]];
+    NSString *trimmedSearchString = [[searchField_ stringValue] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    NSString *searchStringPlusTag = [NSString stringWithFormat:@"%@ tag:%@", trimmedSearchString, tag];
+    [searchField_ setStringValue:[searchStringPlusTag stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]];
     [self controlTextDidChange:nil];
 }
 
@@ -310,8 +310,16 @@ const CGFloat kDefaultTagsWidth = 80;
         [cellMenu insertItem:item atIndex:i+1];
     }
 
+    [cellMenu insertItem:[NSMenuItem separatorItem] atIndex:cellMenu.numberOfItems];
+    [cellMenu addItemWithTitle:@"Search Syntax Help" action:@selector(openHowToSearchHelp:) keyEquivalent:@""];
+
     id searchCell = [searchField cell];
     [searchCell setSearchMenuTemplate:cellMenu];
+
+}
+
+- (void)openHowToSearchHelp:(id)sender {
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://iterm2.com/search_syntax.html"]];
 }
 
 - (void)setUnderlyingDatasource:(ProfileModel*)dataSource
@@ -430,7 +438,17 @@ const CGFloat kDefaultTagsWidth = 80;
     NSRect constrainedBounds = NSMakeRect(0, 0, tableColumn_.width, CGFLOAT_MAX);
     NSSize naturalSize = [cell cellSizeForBounds:constrainedBounds];
 
-    return naturalSize.height;
+    // I have no idea why I need extraHeight but maybe cellSizeForBounds: doesn't center content
+    // properly with attributed strings.
+    return naturalSize.height + [self extraHeight];
+}
+
+- (CGFloat)extraHeight {
+    if (self.mainFont.pointSize <= [NSFont smallSystemFontSize]) {
+        return 1;
+    } else {
+        return 2;
+    }
 }
 
 - (NSFont *)mainFont {
@@ -438,42 +456,71 @@ const CGFloat kDefaultTagsWidth = 80;
 }
 
 - (NSFont *)tagFont {
-    return [NSFont systemFontOfSize:self.mainFont.pointSize - 2];
+    CGFloat reduction = 0;
+    if (self.mainFont.pointSize <= [NSFont smallSystemFontSize]) {
+        reduction = 2;
+    } else {
+        reduction = 3;
+    }
+    return [NSFont systemFontOfSize:self.mainFont.pointSize - reduction];
 }
 
 - (NSAttributedString *)attributedStringForName:(NSString *)name
-                                            tag:(NSString *)tags
+                                           tags:(NSArray *)tags
                                        selected:(BOOL)selected
-                                      isDefault:(BOOL)isDefault {
+                                      isDefault:(BOOL)isDefault
+                                         filter:(NSString *)filter {
     NSColor *textColor;
     NSColor *tagColor;
+    NSColor *highlightedBackgroundColor;
     if (selected) {
         textColor = [NSColor whiteColor];
         tagColor = [NSColor whiteColor];
+        highlightedBackgroundColor = [NSColor colorWithCalibratedRed:1 green:1 blue:0 alpha:0.4];
     } else {
         textColor = [NSColor blackColor];
         tagColor = [NSColor colorWithCalibratedWhite:0.5 alpha:1];
+        highlightedBackgroundColor = [NSColor colorWithCalibratedRed:1 green:1 blue:0 alpha:0.4];
     }
     NSDictionary* plainAttributes = @{ NSForegroundColorAttributeName: textColor,
                                        NSFontAttributeName: self.mainFont };
+    NSDictionary* highlightedNameAttributes = @{ NSForegroundColorAttributeName: textColor,
+                                                 NSBackgroundColorAttributeName: highlightedBackgroundColor,
+                                                 NSFontAttributeName: self.mainFont };
     NSDictionary* smallAttributes = @{ NSForegroundColorAttributeName: tagColor,
                                        NSFontAttributeName: self.tagFont };
+    NSDictionary* highlightedSmallAttributes = @{ NSForegroundColorAttributeName: tagColor,
+                                                  NSBackgroundColorAttributeName: highlightedBackgroundColor,
+                                                  NSFontAttributeName: self.tagFont };
+    NSMutableAttributedString *theAttributedString =
+        [[[ProfileModel attributedStringForName:name
+                   highlightingMatchesForFilter:filter
+                              defaultAttributes:plainAttributes
+                          highlightedAttributes:highlightedNameAttributes] mutableCopy] autorelease];
 
     if (isDefault) {
-        name = [@"★ " stringByAppendingString:name];
+        NSAttributedString *star = [[[NSAttributedString alloc] initWithString:@"★ "
+                                                                    attributes:plainAttributes] autorelease];
+        [theAttributedString insertAttributedString:star atIndex:0];
     }
 
-    if (tags.length) {
-        name = [name stringByAppendingString:@"\n"];
-    }
-    NSMutableAttributedString *theAttributedString =
-        [[[NSMutableAttributedString alloc] initWithString:name
-                                                attributes:plainAttributes] autorelease];
-    if (tags.length) {
-        NSAttributedString *tagsAttributedString =
-            [[[NSAttributedString alloc] initWithString:tags
-                                             attributes:smallAttributes] autorelease];
-        [theAttributedString appendAttributedString:tagsAttributedString];
+    if (tags.count) {
+        NSAttributedString *newline = [[[NSAttributedString alloc] initWithString:@"\n"
+                                                                       attributes:plainAttributes] autorelease];
+        [theAttributedString appendAttributedString:newline];
+
+        NSArray *attributedTags = [ProfileModel attributedTagsForTags:tags
+                                         highlightingMatchesForFilter:filter
+                                                    defaultAttributes:smallAttributes
+                                                highlightedAttributes:highlightedSmallAttributes];
+        NSAttributedString *comma =
+            [[[NSAttributedString alloc] initWithString:@", " attributes:smallAttributes] autorelease];
+        for (NSAttributedString *attributedTag in attributedTags) {
+            [theAttributedString appendAttributedString:attributedTag];
+            if (attributedTag != attributedTags.lastObject) {
+                [theAttributedString appendAttributedString:comma];
+            }
+        }
     }
 
     return theAttributedString;
@@ -486,9 +533,10 @@ const CGFloat kDefaultTagsWidth = 80;
     if (aTableColumn == tableColumn_) {
         Profile *defaultProfile = [[ProfileModel sharedInstance] defaultBookmark];
         return [self attributedStringForName:bookmark[KEY_NAME]
-                                         tag:[bookmark[KEY_TAGS] componentsJoinedByString:@", "]
+                                        tags:bookmark[KEY_TAGS]
                                     selected:[[tableView_ selectedRowIndexes] containsIndex:rowIndex]
-                                   isDefault:[bookmark[KEY_GUID] isEqualToString:defaultProfile[KEY_GUID]]];
+                                   isDefault:[bookmark[KEY_GUID] isEqualToString:defaultProfile[KEY_GUID]]
+                                      filter:[searchField_ stringValue]];
     } else if (aTableColumn == commandColumn_) {
         if (![[bookmark objectForKey:KEY_CUSTOM_COMMAND] isEqualToString:@"Yes"]) {
             return @"Login shell";

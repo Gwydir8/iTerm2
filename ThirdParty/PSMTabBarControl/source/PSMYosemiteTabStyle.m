@@ -112,7 +112,7 @@
     NSRect result;
     result.size = [metalCloseButton size];
     result.origin.x = cellFrame.origin.x + MARGIN_X;
-    result.origin.y = cellFrame.origin.y + MARGIN_Y + 1.0;
+    result.origin.y = cellFrame.origin.y + MARGIN_Y;
 
     return result;
 }
@@ -136,7 +136,7 @@
     NSRect result;
     result.size = NSMakeSize(kPSMTabBarIconWidth, kPSMTabBarIconWidth);
     result.origin.x = minX - kPSMTabBarCellIconPadding - kPSMTabBarIconWidth;
-    result.origin.y = cellFrame.origin.y + MARGIN_Y;
+    result.origin.y = cellFrame.origin.y + MARGIN_Y - 1.0;
 
     return result;
 }
@@ -172,7 +172,7 @@
     NSRect result;
     result.size = NSMakeSize(countWidth, 2 * kPSMMetalObjectCounterRadius); // temp
     result.origin.x = cellFrame.origin.x + cellFrame.size.width - MARGIN_X - result.size.width;
-    result.origin.y = cellFrame.origin.y + MARGIN_Y + 1.0;
+    result.origin.y = cellFrame.origin.y + MARGIN_Y;
 
     if (![[cell indicator] isHidden]) {
         result.origin.x -= kPSMTabBarIndicatorWidth + kPSMTabBarCellPadding;
@@ -181,29 +181,29 @@
     return result;
 }
 
-
-- (float)minimumWidthOfTabCell:(PSMTabBarCell *)cell {
-    float resultWidth = 0.0;
+- (CGFloat)widthOfLeftMatterInCell:(PSMTabBarCell *)cell {
+    CGFloat resultWidth = 0.0;
 
     // left margin
     resultWidth = MARGIN_X;
 
     // close button?
-    if ([cell hasCloseButton] && ![cell isCloseButtonSuppressed]) {
-        resultWidth += [metalCloseButton size].width + kPSMTabBarCellPadding;
-    }
+    resultWidth += [metalCloseButton size].width + kPSMTabBarCellPadding;
 
     // icon?
     if ([cell hasIcon]) {
         resultWidth += kPSMTabBarIconWidth + kPSMTabBarCellIconPadding;
     }
+    return resultWidth;
+}
 
-    // the label
-    resultWidth += kPSMMinimumTitleWidth;
-
+- (CGFloat)widthOfRightMatterInCell:(PSMTabBarCell *)cell {
+    CGFloat resultWidth = 0;
     // object counter?
     if ([cell count] > 0) {
         resultWidth += [self objectCounterRectForTabCell:cell].size.width + kPSMTabBarCellPadding;
+    } else {
+        resultWidth += [metalCloseButton size].width + kPSMTabBarCellPadding;
     }
 
     // indicator?
@@ -213,43 +213,19 @@
 
     // right margin
     resultWidth += MARGIN_X;
+    return resultWidth;
+}
 
-    return ceil(resultWidth);
+- (float)minimumWidthOfTabCell:(PSMTabBarCell *)cell {
+    return ceil([self widthOfLeftMatterInCell:cell] +
+                kPSMMinimumTitleWidth +
+                [self widthOfRightMatterInCell:cell]);
 }
 
 - (float)desiredWidthOfTabCell:(PSMTabBarCell *)cell {
-    float resultWidth = 0.0;
-
-    // left margin
-    resultWidth = MARGIN_X;
-
-    // close button?
-    if ([cell hasCloseButton] && ![cell isCloseButtonSuppressed]) {
-        resultWidth += [metalCloseButton size].width + kPSMTabBarCellPadding;
-    }
-
-    // icon?
-    if ([cell hasIcon]) {
-        resultWidth += kPSMTabBarIconWidth + kPSMTabBarCellIconPadding;
-    }
-
-    // the label
-    resultWidth += [[cell attributedStringValue] size].width;
-
-    // object counter?
-    if ([cell count] > 0) {
-        resultWidth += [self objectCounterRectForTabCell:cell].size.width + kPSMTabBarCellPadding;
-    }
-
-    // indicator?
-    if ([[cell indicator] isHidden] == NO) {
-        resultWidth += kPSMTabBarCellPadding + kPSMTabBarIndicatorWidth;
-    }
-
-    // right margin
-    resultWidth += MARGIN_X;
-
-    return ceil(resultWidth);
+    return ceil([self widthOfLeftMatterInCell:cell] +
+                [[cell attributedStringValue] size].width +
+                [self widthOfRightMatterInCell:cell]);
 }
 
 #pragma mark - Cell Values
@@ -335,15 +311,14 @@
 
 - (NSColor *)topLineColorSelected:(BOOL)selected {
     if (selected) {
-        return [NSColor colorWithSRGBRed:195/255.0 green:191/255.0 blue:195/255.0 alpha:1];
+        return [tabBar.window backgroundColor];
     } else {
         return [NSColor colorWithSRGBRed:182/255.0 green:179/255.0 blue:182/255.0 alpha:1];
     }
 }
 
 - (NSColor *)verticalLineColor {
-    CGFloat value = 184/255.0;
-    return [NSColor colorWithSRGBRed:value green:value blue:value alpha:1];
+    return [NSColor colorWithSRGBRed:182/255.0 green:179/255.0 blue:182/255.0 alpha:1];
 }
 
 - (NSColor *)bottomLineColorSelected:(BOOL)selected {
@@ -354,31 +329,16 @@
     }
 }
 
-- (NSGradient *)backgroundGradientSelected:(BOOL)selected {
-    // With adj=0, the colors are very close to those of Safari on Yosemite.
-    // That's not enough contrast, though. positive values of adj increase contrast.
-    CGFloat adj = 7;
+- (NSColor *)backgroundColorSelected:(BOOL)selected highlightAmount:(CGFloat)highlightAmount {
     if (selected) {
-        return [[[NSGradient alloc] initWithStartingColor:[NSColor colorWithSRGBRed:(adj+222)/255.0
-                                                                              green:(adj+219)/255.0
-                                                                               blue:(adj+222)/255.0
-                                                                              alpha:1]
-                                              endingColor:[NSColor colorWithSRGBRed:(adj+214)/255.0
-                                                                              green:(adj+211)/255.0
-                                                                               blue:(adj+214)/255.0
-                                                                              alpha:1]]
-                   autorelease];
+        if (tabBar.window.backgroundColor) {
+            return tabBar.window.backgroundColor;
+        } else {
+            return [NSColor windowBackgroundColor];
+        }
     } else {
-        adj *= -1;
-        return [[[NSGradient alloc] initWithStartingColor:[NSColor colorWithSRGBRed:(adj+206)/255.0
-                                                                              green:(adj+204)/255.0
-                                                                               blue:(adj+206)/255.0
-                                                                              alpha:1]
-                                              endingColor:[NSColor colorWithSRGBRed:(adj+199)/255.0
-                                                                              green:(adj+196)/255.0
-                                                                               blue:(adj+199)/255.0
-                                                                              alpha:1]]
-                   autorelease];
+        CGFloat value = 196/255.0 - highlightAmount * 0.1;
+        return [NSColor colorWithSRGBRed:value green:value blue:value alpha:1];
     }
 }
 
@@ -393,9 +353,11 @@
 - (void)drawCellBackgroundAndFrameHorizontallyOriented:(BOOL)horizontal
                                                 inRect:(NSRect)cellFrame
                                               selected:(BOOL)selected
-                                          withTabColor:(NSColor *)tabColor {
-    CGFloat angle = horizontal ? 90 : 0;
-    [[self backgroundGradientSelected:selected] drawInRect:cellFrame angle:angle];
+                                          withTabColor:(NSColor *)tabColor
+                                                isLast:(BOOL)isLast
+                                       highlightAmount:(CGFloat)highlightAmount {
+    [[self backgroundColorSelected:selected highlightAmount:highlightAmount] set];
+    NSRectFill(cellFrame);
 
     if (tabColor) {
         if (selected) {
@@ -420,20 +382,26 @@
             [[self verticalLineColor] set];
             [self drawVerticalLineInFrame:cellFrame x:NSMinX(cellFrame)];
         }
-
         // Right line
         CGFloat adjustment = 0;
         [[self verticalLineColor] set];
         [self drawVerticalLineInFrame:cellFrame x:NSMaxX(cellFrame) + adjustment];
-        
+
         // Top line
         [[self topLineColorSelected:selected] set];
-        [self drawHorizontalLineInFrame:cellFrame y:NSMinY(cellFrame)];
+        if (isLast) {
+            NSRect rect = cellFrame;
+            rect.size.width -= 1;
+            [self drawHorizontalLineInFrame:rect y:NSMinY(cellFrame)];
+        } else {
+            [self drawHorizontalLineInFrame:cellFrame y:NSMinY(cellFrame)];
+        }
 
         // Bottom line
         [[self bottomLineColorSelected:selected] set];
         [self drawHorizontalLineInFrame:cellFrame y:NSMaxY(cellFrame) - 1];
-    } else{
+
+    } else {
         // Bottom line
         [[self verticalLineColor] set];
         cellFrame.origin.x += 1;
@@ -455,46 +423,57 @@
     }
 }
 
-- (void)drawTabCell:(PSMTabBarCell *)cell {
+- (void)drawTabCell:(PSMTabBarCell *)cell highlightAmount:(CGFloat)highlightAmount {
     // TODO: Test hidden control, whose height is less than 2. Maybe it happens while dragging?
     [self drawCellBackgroundAndFrameHorizontallyOriented:(orientation == PSMTabBarHorizontalOrientation)
                                                   inRect:cell.frame
                                                 selected:([cell state] == NSOnState)
-                                            withTabColor:[cell tabColor]];
+                                            withTabColor:[cell tabColor]
+                                                  isLast:cell == tabBar.cells.lastObject
+                                         highlightAmount:highlightAmount];
 
-    [self drawInteriorWithTabCell:cell inView:[cell controlView]];
+    [self drawInteriorWithTabCell:cell inView:[cell controlView] highlightAmount:highlightAmount];
 }
 
 
-- (void)drawInteriorWithTabCell:(PSMTabBarCell *)cell inView:(NSView*)controlView {
+- (void)drawInteriorWithTabCell:(PSMTabBarCell *)cell
+                         inView:(NSView*)controlView
+                highlightAmount:(CGFloat)highlightAmount {
     NSRect cellFrame = [cell frame];
     float labelPosition = cellFrame.origin.x + MARGIN_X;
 
     // close button
-    if ([cell hasCloseButton] && ![cell isCloseButtonSuppressed]) {
-        NSSize closeButtonSize = NSZeroSize;
-        NSRect closeButtonRect = [cell closeButtonRectForFrame:cellFrame];
-        NSImage *closeButton = nil;
+    NSSize closeButtonSize = NSZeroSize;
+    NSRect closeButtonRect = [cell closeButtonRectForFrame:cellFrame];
+    NSImage *closeButton = nil;
 
-        closeButton = metalCloseButton;
-        if ([cell closeButtonOver]) {
-            closeButton = metalCloseButtonOver;
+    closeButton = metalCloseButton;
+    if ([cell closeButtonOver]) {
+        closeButton = metalCloseButtonOver;
+    }
+    if ([cell closeButtonPressed]) {
+        closeButton = metalCloseButtonDown;
+    }
+
+    closeButtonSize = [closeButton size];
+    // scoot label over
+    labelPosition += closeButtonSize.width + kPSMTabBarCellPadding;
+
+    // Draw close button
+    if ([cell hasCloseButton] && [cell closeButtonVisible]) {
+        CGFloat fraction;
+        if (cell.isCloseButtonSuppressed) {
+            fraction = highlightAmount;
+        } else {
+            fraction = 1;
         }
-        if ([cell closeButtonPressed]) {
-            closeButton = metalCloseButtonDown;
-        }
-
-        closeButtonSize = [closeButton size];
-
         [closeButton drawAtPoint:closeButtonRect.origin
                         fromRect:NSZeroRect
                        operation:NSCompositeSourceOver
-                        fraction:1.0];
+                        fraction:fraction];
 
-
-        // scoot label over
-        labelPosition += closeButtonSize.width + kPSMTabBarCellPadding;
     }
+
 
     // icon
     NSRect iconRect = NSZeroRect;
@@ -519,7 +498,7 @@
     }
 
     // object counter
-    if ([cell count] > 0){
+    if ([cell count] > 0) {
         NSRect myRect = [self objectCounterRectForTabCell:cell];
         // draw attributed string centered in area
         NSRect counterStringRect;
@@ -539,7 +518,7 @@
         labelRect.size.width -= iconRect.size.width + kPSMTabBarCellIconPadding;
     }
     labelRect.size.height = cellFrame.size.height;
-    labelRect.origin.y = cellFrame.origin.y + MARGIN_Y + 1.0;
+    labelRect.origin.y = cellFrame.origin.y + MARGIN_Y + 0.5;
 
     if (![[cell indicator] isHidden]) {
         labelRect.size.width -= (kPSMTabBarIndicatorWidth + kPSMTabBarCellPadding);
@@ -547,6 +526,8 @@
 
     if ([cell count] > 0) {
         labelRect.size.width -= ([self objectCounterRectForTabCell:cell].size.width + kPSMTabBarCellPadding);
+    } else {
+        labelRect.size.width -= (closeButtonSize.width + kPSMTabBarCellPadding);
     }
 
     // label

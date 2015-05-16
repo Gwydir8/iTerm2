@@ -162,7 +162,8 @@ static void RollInHotkeyTerm(PseudoTerminal* term)
                                            withURL:nil
                                           isHotkey:YES
                                            makeKey:YES
-                                           command:nil];
+                                           command:nil
+                                             block:nil];
         if (session) {
             term = [[iTermController sharedInstance] terminalWithSession:session];
         }
@@ -316,8 +317,10 @@ static void RollOutHotkeyTerm(PseudoTerminal* term, BOOL itermWasActiveWhenHotke
     }
 }
 
-- (void)hideHotKeyWindow:(PseudoTerminal*)hotkeyTerm
-{
+- (void)hideHotKeyWindow:(PseudoTerminal*)hotkeyTerm {
+    for (NSWindow *sheet in hotkeyTerm.window.sheets) {
+        [NSApp endSheet:sheet];
+    }
     HKWLog(@"Hide hotkey window.");
     if ([[hotkeyTerm window] isVisible]) {
         HKWLog(@"key window is %@", [NSApp keyWindow]);
