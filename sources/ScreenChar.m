@@ -52,6 +52,64 @@ static int ccmNextKey = 1;
 // strings before creating a new one with a recycled code.
 static BOOL hasWrapped = NO;
 
+@interface iTermStringLine()
+@property(nonatomic, retain) NSString *stringValue;
+@end
+
+@implementation iTermStringLine {
+    unichar *_backingStore;
+    int *_deltas;
+    int _length;
+}
+
+- (instancetype)initWithScreenChars:(screen_char_t *)screenChars
+                             length:(NSInteger)length {
+    self = [super init];
+    if (self) {
+        _length = length;
+        _stringValue = [ScreenCharArrayToString(screenChars,
+                                                0,
+                                                length,
+                                                &_backingStore,
+                                                &_deltas) retain];
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [_stringValue release];
+    if (_backingStore) {
+        free(_backingStore);
+    }
+    if (_deltas) {
+        free(_deltas);
+    }
+    [super dealloc];
+}
+
+- (NSRange)rangeOfScreenCharsForRangeInString:(NSRange)rangeInString {
+    if (_length == 0) {
+        return NSMakeRange(NSNotFound, 0);
+    }
+
+    // Convert to signed types because subtraction is used later on.
+    const NSInteger location = rangeInString.location;
+    const NSInteger length = rangeInString.length;
+    NSInteger indexInScreenCharsOfFirstCharInRange = location + _deltas[MIN(_length - 1, location)];
+    if (length == 0) {
+        return NSMakeRange(indexInScreenCharsOfFirstCharInRange, 0);
+    }
+
+    const NSInteger indexInStringOfLastCharInRange = location + length - 1;
+    const NSInteger indexInScreenCharsOfLastCharInRange =
+        indexInStringOfLastCharInRange + _deltas[MIN(_length - 1, indexInStringOfLastCharInRange)];
+    const NSInteger numberOfScreenChars =
+        indexInScreenCharsOfLastCharInRange - indexInScreenCharsOfFirstCharInRange + 1;
+    return NSMakeRange(indexInScreenCharsOfFirstCharInRange, numberOfScreenChars);
+}
+
+@end
+
 @implementation ScreenCharArray
 @synthesize line = _line;
 @synthesize length = _length;
