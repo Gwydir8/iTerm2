@@ -941,24 +941,24 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     int x = proposedSize;
     if (vertically) {
         if ([_view showTitle]) {
-            // x = 50/53
             x -= [SessionView titleHeight];
         }
-        // x = 28/31
         x -= VMARGIN * 2;
-        // x = 18/21
-        // iLineHeight = 10
         int iLineHeight = [_textview lineHeight];
+        if (iLineHeight == 0) {
+            return 0;
+        }
         x %= iLineHeight;
-        // x = 8/1
         if (x > iLineHeight / 2) {
             x -= iLineHeight;
         }
-        // x = -2/1
         return x;
     } else {
         x -= MARGIN * 2;
         int iCharWidth = [_textview charWidth];
+        if (iCharWidth == 0) {
+            return 0;
+        }
         x %= iCharWidth;
         if (x > iCharWidth / 2) {
             x -= iCharWidth;
@@ -3649,7 +3649,6 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     theSize.width = MAX(1, [[tmuxBookmark objectForKey:KEY_COLUMNS] intValue]);
     theSize.height = MAX(1, [[tmuxBookmark objectForKey:KEY_ROWS] intValue]);
     [_tmuxController validateOptions];
-    [_tmuxController setClientSize:theSize];
 
     [self printTmuxMessage:@"** tmux mode started **"];
     [_screen crlf];
@@ -4671,6 +4670,8 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
         spacesPerTab = [_pasteHelper numberOfSpacesToConvertTabsTo:theString];
         if (spacesPerTab >= 0) {
             tabTransform = kTabTransformConvertToSpaces;
+        } else if (spacesPerTab == kNumberOfSpacesPerTabCancel) {
+            return;
         }
     }
 
@@ -4678,6 +4679,7 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     [_pasteHelper pasteString:theString
                        slowly:!!(flags & kPTYSessionPasteSlowly)
              escapeShellChars:!!(flags & kPTYSessionPasteEscapingSpecialCharacters)
+                     commands:NO
                  tabTransform:tabTransform
                  spacesPerTab:spacesPerTab];
 }
@@ -4895,9 +4897,8 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     [[self tab] previousSession];
 }
 
-- (void)textViewEditSession
-{
-    [[[self tab] realParentWindow] editSession:self];
+- (void)textViewEditSession {
+    [[[self tab] realParentWindow] editSession:self makeKey:YES];
 }
 
 - (void)textViewToggleBroadcastingInput
@@ -4937,6 +4938,7 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
         [_pasteHelper pasteString:[data stringWithBase64EncodingWithLineBreak:@"\r"]
                            slowly:NO
                  escapeShellChars:NO
+                         commands:NO
                      tabTransform:kTabTransformNone
                      spacesPerTab:0];
     }
@@ -5768,6 +5770,7 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
     _lastPromptLine = (long long)line + [_screen totalScrollbackOverflow];
     DLog(@"FinalTerm: prompt started on line %d. Add a mark there. Save it as lastPromptLine.", line);
     [[self screenAddMarkOnLine:line] setIsPrompt:YES];
+    [_pasteHelper unblock];
 }
 
 - (VT100ScreenMark *)screenAddMarkOnLine:(int)line {
@@ -6576,6 +6579,10 @@ static NSTimeInterval kMinimumPartialLineTriggerCheckInterval = 0.5;
 
 - (BOOL)pasteHelperIsAtShellPrompt {
     return !_shellIntegrationEverUsed || [self currentCommand] != nil;
+}
+
+- (BOOL)pasteHelperCanWaitForPrompt {
+    return _shellIntegrationEverUsed;
 }
 
 @end

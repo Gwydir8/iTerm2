@@ -1,6 +1,5 @@
 #import "PseudoTerminal.h"
 
-
 #import "ColorsMenuItemView.h"
 #import "CommandHistory.h"
 #import "CommandHistoryEntry.h"
@@ -14,6 +13,7 @@
 #import "HotkeyWindowController.h"
 #import "ITAddressBookMgr.h"
 #import "iTerm.h"
+#import "iTermAboutWindow.h"
 #import "iTermAdvancedSettingsModel.h"
 #import "iTermApplication.h"
 #import "iTermApplicationDelegate.h"
@@ -2437,6 +2437,10 @@ static const CGFloat kHorizontalTabBarHeight = 22;
                withObject:nil
                afterDelay:0];
     [[NSNotificationCenter defaultCenter] postNotificationName:kCurrentSessionDidChange object:nil];
+    if ([[[PreferencePanel sessionsInstance] window] isVisible]) {
+        [self editSession:self.currentSession makeKey:NO];
+    }
+    [self notifyTmuxOfTabChange];
 }
 
 - (void)makeCurrentSessionFirstResponder
@@ -2800,6 +2804,7 @@ static const CGFloat kHorizontalTabBarHeight = 22;
             // If a popup is opening, though, we shouldn't close ourselves.
             if (![[NSApp keyWindow] isKindOfClass:[PopupWindow class]] &&
                 ![[NSApp keyWindow] isKindOfClass:[iTermOpenQuicklyWindow class]] &&
+                ![[NSApp keyWindow] isKindOfClass:[iTermAboutWindow class]] &&
                 ![[[NSApp keyWindow] windowController] isKindOfClass:[ProfilesWindow class]] &&
                 ![iTermWarning showingWarning] &&
                 ![[[NSApp keyWindow] windowController] isKindOfClass:[PreferencePanel class]] &&
@@ -3025,7 +3030,7 @@ static const CGFloat kHorizontalTabBarHeight = 22;
 - (void)saveTmuxWindowOrigins
 {
     for (TmuxController *tc in [self uniqueTmuxControllers]) {
-            [tc saveWindowOrigins];
+        [tc saveWindowOrigins];
     }
 }
 
@@ -3055,6 +3060,8 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     [self repositionWidgets];
 
     [self notifyTmuxOfWindowResize];
+    // windowDidMove does not get called if the origin changes because of a resize.
+    [self saveTmuxWindowOrigins];
 
     for (PTYTab *aTab in [self tabs]) {
         if ([aTab isTmuxTab]) {
@@ -3369,6 +3376,7 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     [self.window makeFirstResponder:[[self currentSession] textview]];
     [self refreshTools];
     [self updateTabColors];
+    [self saveTmuxWindowOrigins];
 }
 
 - (BOOL)fullScreen
@@ -3508,6 +3516,7 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     for (PTYTab *aTab in [self tabs]) {
         [aTab notifyWindowChanged];
     }
+    [self saveTmuxWindowOrigins];
 }
 
 - (void)windowWillExitFullScreen:(NSNotification *)notification
@@ -3540,6 +3549,7 @@ static const CGFloat kHorizontalTabBarHeight = 22;
         [aTab notifyWindowChanged];
     }
     [self notifyTmuxOfWindowResize];
+    [self saveTmuxWindowOrigins];
 }
 
 - (NSRect)windowWillUseStandardFrame:(NSWindow *)sender defaultFrame:(NSRect)defaultFrame
@@ -3679,17 +3689,19 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     if (!session) {
         return;
     }
-    [self editSession:session];
+    [self editSession:session makeKey:YES];
 }
 
-- (void)editSession:(PTYSession*)session
-{
+- (void)editSession:(PTYSession *)session makeKey:(BOOL)makeKey {
     Profile* bookmark = [session profile];
     if (!bookmark) {
         return;
     }
-    NSString* newGuid = [session divorceAddressBookEntryFromPreferences];
-    [[PreferencePanel sessionsInstance] openToProfileWithGuid:newGuid];
+    NSString *newGuid = [session divorceAddressBookEntryFromPreferences];
+    [[PreferencePanel sessionsInstance] openToProfileWithGuid:newGuid selectGeneralTab:makeKey];
+    if (makeKey) {
+        [[[PreferencePanel sessionsInstance] window] makeKeyAndOrderFront:nil];
+    }
 }
 
 - (void)menuForEvent:(NSEvent *)theEvent menu:(NSMenu *)theMenu
@@ -3803,8 +3815,7 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     }
 }
 
-- (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)tabViewItem
-{
+- (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)tabViewItem {
     DLog(@"Did select tab view %@", tabViewItem);
     tabBarControl.flashing = YES;
 
@@ -3856,6 +3867,16 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     [self refreshTools];
     [self updateTabColors];
     [[NSNotificationCenter defaultCenter] postNotificationName:kCurrentSessionDidChange object:nil];
+    [self notifyTmuxOfTabChange];
+    if ([[[PreferencePanel sessionsInstance] window] isVisible]) {
+        [self editSession:self.currentSession makeKey:NO];
+    }
+}
+
+- (void)notifyTmuxOfTabChange {
+    if (self.currentTab.isTmuxTab) {
+        [self.currentTab.tmuxController setCurrentWindow:self.currentTab.tmuxWindow];
+    }
 }
 
 - (void)showOrHideInstantReplayBar
@@ -4303,16 +4324,11 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     [self editCurrentSession:self];
 }
 
-- (void)tabViewDoubleClickTabBar:(NSTabView *)tabView
-{
-    Profile* prototype = [[ProfileModel sharedInstance] defaultBookmark];
-    if (!prototype) {
-        NSMutableDictionary* aDict = [[[NSMutableDictionary alloc] init] autorelease];
-        [ITAddressBookMgr setDefaultsInBookmark:aDict];
-        [aDict setObject:[ProfileModel freshGuid] forKey:KEY_GUID];
-        prototype = aDict;
-    }
-    [self createTabWithProfile:prototype withCommand:nil];
+- (void)tabViewDoubleClickTabBar:(NSTabView *)tabView {
+    iTermApplicationDelegate *itad = (iTermApplicationDelegate *)[[iTermApplication sharedApplication] delegate];
+    // Note: this assume that self is the front window (it should be!). It is smart enough to create
+    // a tmux tab if the user wants one (or ask if needed).
+    [itad newSession:nil];
 }
 
 - (void)updateTabColors
@@ -5102,7 +5118,11 @@ static const CGFloat kHorizontalTabBarHeight = 22;
         [self hideAutoCommandHistory];
     }
     [[toolbelt_ commandHistoryView] updateCommands];
-    [[NSNotificationCenter defaultCenter] postNotificationName:kCurrentSessionDidChange object:nil];}
+    [[NSNotificationCenter defaultCenter] postNotificationName:kCurrentSessionDidChange object:nil];
+    if ([[[PreferencePanel sessionsInstance] window] isVisible]) {
+        [self editSession:self.currentSession makeKey:NO];
+    }
+}
 
 
 - (void)fitWindowToTabs
@@ -5926,9 +5946,12 @@ static const CGFloat kHorizontalTabBarHeight = 22;
     BOOL tabBarVisible = [self tabBarShouldBeVisible];
     BOOL topTabBar = ([iTermPreferences intForKey:kPreferenceKeyTabPosition] == PSMTab_TopTab);
     BOOL visibleTopTabBar = (tabBarVisible && topTabBar);
+    BOOL windowTypeCompatibleWithTopBorder = (windowType_ == WINDOW_TYPE_BOTTOM ||
+                                              windowType_ == WINDOW_TYPE_NO_TITLE_BAR ||
+                                              windowType_ == WINDOW_TYPE_BOTTOM_PARTIAL);
     return ([iTermPreferences boolForKey:kPreferenceKeyShowWindowBorder] &&
             !visibleTopTabBar &&
-            (windowType_ == WINDOW_TYPE_BOTTOM || windowType_ == WINDOW_TYPE_NO_TITLE_BAR));
+            windowTypeCompatibleWithTopBorder);
 }
 
 - (BOOL)_haveRightBorder
@@ -7325,6 +7348,13 @@ static const CGFloat kHorizontalTabBarHeight = 22;
         _directoriesPopupWindowController.delegate = nil;
     }
     [[NSNotificationCenter defaultCenter] postNotificationName:kCurrentSessionDidChange object:nil];
+    if ([[[PreferencePanel sessionsInstance] window] isVisible]) {
+        if (self.currentSession) {
+            [self editSession:self.currentSession makeKey:NO];
+        } else {
+            [[[PreferencePanel sessionsInstance] window] close];
+        }
+    }
 }
 
 - (IBAction)openSelection:(id)sender {
